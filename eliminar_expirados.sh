@@ -237,7 +237,15 @@ chmod +x /root/expire_clean.sh
 # CONFIGURAR CRON LIMPIO
 # =========================
 echo "* * * * * /root/limit_pro.sh" > /tmp/cronvpn
+
+# 🔥 ejecutar expire cada 10 segundos
 echo "* * * * * /root/expire_clean.sh" >> /tmp/cronvpn
+echo "* * * * * sleep 10; /root/expire_clean.sh" >> /tmp/cronvpn
+echo "* * * * * sleep 20; /root/expire_clean.sh" >> /tmp/cronvpn
+echo "* * * * * sleep 30; /root/expire_clean.sh" >> /tmp/cronvpn
+echo "* * * * * sleep 40; /root/expire_clean.sh" >> /tmp/cronvpn
+echo "* * * * * sleep 50; /root/expire_clean.sh" >> /tmp/cronvpn
+
 
 crontab /tmp/cronvpn
 rm -f /tmp/cronvpn
