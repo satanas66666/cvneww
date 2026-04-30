@@ -196,12 +196,16 @@ if [ -f "$TEMP_FILE" ]; then
     NOW=$(date +%s)
     NEW=""
 
-    while IFS="|" read -r user exp; do
+    while IFS="|" read -r user exp || [ -n "$user" ]; do
 
         # 🔒 VALIDACIONES PRO
         [ -z "$user" ] && continue
         [[ ! "$exp" =~ ^[0-9]+$ ]] && continue
-        id "$user" &>/dev/null || continue
+
+        # si el usuario ya no existe → no lo guardes
+        if ! id "$user" &>/dev/null; then
+            continue
+        fi
 
         if [ "$NOW" -ge "$exp" ]; then
 
@@ -234,18 +238,66 @@ EOF
 chmod +x /root/expire_clean.sh
 
 # =========================
+# 🔥 CREAR DAEMON AUTOMÁTICO (ANTI-DUPLICADOS)
+# =========================
+
+echo "⚙️ Configurando daemon de expiración..."
+
+# 🔄 detener servicio si ya existe
+systemctl stop expire-daemon 2>/dev/null
+systemctl disable expire-daemon 2>/dev/null
+
+# 🧹 eliminar servicio viejo
+rm -f /etc/systemd/system/expire-daemon.service
+
+# =========================
+# CREAR SCRIPT DAEMON
+# =========================
+cat > /root/expire_daemon.sh << 'EOF'
+#!/bin/bash
+
+while true; do
+    /root/expire_clean.sh
+    sleep 10
+done
+EOF
+
+chmod +x /root/expire_daemon.sh
+
+# =========================
+# CREAR SERVICIO SYSTEMD
+# =========================
+cat > /etc/systemd/system/expire-daemon.service <<EOF
+[Unit]
+Description=Expire Users Daemon PRO
+After=network.target
+
+[Service]
+ExecStart=/root/expire_daemon.sh
+Restart=always
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# =========================
+# ACTIVAR SERVICIO LIMPIO
+# =========================
+systemctl daemon-reexec
+systemctl daemon-reload
+
+systemctl enable expire-daemon
+systemctl restart expire-daemon
+
+echo "✅ Daemon activo (eliminación automática cada 10s)"
+
+
+# =========================
 # CONFIGURAR CRON LIMPIO
 # =========================
 echo "* * * * * /root/limit_pro.sh" > /tmp/cronvpn
-
-# 🔥 ejecutar expire cada 10 segundos
-echo "* * * * * /root/expire_clean.sh" >> /tmp/cronvpn
-echo "* * * * * sleep 10; /root/expire_clean.sh" >> /tmp/cronvpn
-echo "* * * * * sleep 20; /root/expire_clean.sh" >> /tmp/cronvpn
-echo "* * * * * sleep 30; /root/expire_clean.sh" >> /tmp/cronvpn
-echo "* * * * * sleep 40; /root/expire_clean.sh" >> /tmp/cronvpn
-echo "* * * * * sleep 50; /root/expire_clean.sh" >> /tmp/cronvpn
-
 
 crontab /tmp/cronvpn
 rm -f /tmp/cronvpn
@@ -276,3 +328,4 @@ echo "📄 Logs:"
 echo "/var/log/expire.log"
 echo ""
 echo "🔥 VPS PRO LISTO 🚀"
+
