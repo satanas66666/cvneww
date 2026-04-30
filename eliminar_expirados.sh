@@ -257,8 +257,8 @@ cat > /root/expire_daemon.sh << 'EOF'
 #!/bin/bash
 
 while true; do
-    /root/expire_clean.sh
-    sleep 10
+    bash /root/expire_clean.sh
+    sleep 5
 done
 EOF
 
@@ -273,7 +273,7 @@ Description=Expire Users Daemon PRO
 After=network.target
 
 [Service]
-ExecStart=/root/expire_daemon.sh
+ExecStart=/bin/bash /root/expire_daemon.sh
 Restart=always
 RestartSec=2
 User=root
@@ -291,8 +291,7 @@ systemctl daemon-reload
 systemctl enable expire-daemon
 systemctl restart expire-daemon
 
-echo "✅ Daemon activo (eliminación automática cada 10s)"
-
+echo "✅ Daemon activo (eliminación automática cada 5s)"
 
 # =========================
 # CONFIGURAR CRON LIMPIO
