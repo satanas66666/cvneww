@@ -1,43 +1,51 @@
 #!/bin/bash
 
-echo "🧹 Limpiando instalación anterior..."
+echo "🧹 Preparando sistema PRO VPN..."
 
 # =========================
-# LIMPIAR CRON ANTERIOR
+# CONFIGURACIÓN GENERAL
 # =========================
-crontab -l 2>/dev/null | grep -v 'limit_pro.sh' | grep -v 'expire_clean.sh' > /tmp/cronvpn
+LIMIT_DIR="/etc/SSHPlus/limits"
+BLOCK_DIR="/etc/SSHPlus/blocked"
+ABUSE_DIR="/etc/SSHPlus/abuse"
+WARN_DIR="/etc/SSHPlus/warnings"
+TEMP_BLOCK_DIR="/etc/SSHPlus/temp_block"
+LOG_EXPIRE="/var/log/expire.log"
+LOG_ABUSE="/var/log/abuse.log"
+LOG_UNLOCK="/var/log/unlock.log"
+
+# =========================
+# NO BORRAR DATOS DEL PANEL
+# =========================
+mkdir -p "$LIMIT_DIR" "$BLOCK_DIR" "$ABUSE_DIR" "$WARN_DIR" "$TEMP_BLOCK_DIR"
+touch "$LOG_EXPIRE" "$LOG_ABUSE" "$LOG_UNLOCK" /etc/vpn_temp_users
+
+chmod 755 /etc/SSHPlus
+chmod 755 "$LIMIT_DIR" "$BLOCK_DIR" "$ABUSE_DIR" "$WARN_DIR" "$TEMP_BLOCK_DIR"
+chmod 644 "$LOG_EXPIRE" "$LOG_ABUSE" "$LOG_UNLOCK"
+
+# =========================
+# LIMPIAR CRON ANTERIOR SOLO DE ESTOS SCRIPTS
+# =========================
+crontab -l 2>/dev/null | grep -v '/root/limit_pro.sh' | grep -v '/root/expire_clean.sh' > /tmp/cronvpn
 crontab /tmp/cronvpn
 rm -f /tmp/cronvpn
 
 # =========================
 # MATAR PROCESOS ANTERIORES
 # =========================
-pkill -f limit_pro.sh 2>/dev/null
-pkill -f expire_clean.sh 2>/dev/null
+pkill -f "/root/limit_pro.sh" 2>/dev/null
+pkill -f "/root/expire_clean.sh" 2>/dev/null
+pkill -f "/root/expire_daemon.sh" 2>/dev/null
 
 # =========================
 # ELIMINAR SCRIPTS VIEJOS
 # =========================
 rm -f /root/limit_pro.sh
 rm -f /root/expire_clean.sh
+rm -f /root/expire_daemon.sh
 
-# =========================
-# LIMPIAR CONFIG (NO BORRA USUARIOS)
-# =========================
-rm -rf /etc/SSHPlus/limits/*
-rm -rf /etc/SSHPlus/blocked/*
-rm -rf /etc/SSHPlus/abuse/*
-
-echo "🚀 Instalando sistema PRO VPN..."
-
-# =========================
-# CREAR DIRECTORIOS
-# =========================
-mkdir -p /etc/SSHPlus/limits
-mkdir -p /etc/SSHPlus/blocked
-mkdir -p /etc/SSHPlus/abuse
-
-chmod -R 777 /etc/SSHPlus
+echo "🚀 Instalando sistema PRO VPN profesional..."
 
 # =========================
 # SCRIPT LIMITADOR PRO
@@ -48,27 +56,75 @@ cat > /root/limit_pro.sh << 'EOF'
 LIMIT_DIR="/etc/SSHPlus/limits"
 BLOCK_DIR="/etc/SSHPlus/blocked"
 ABUSE_DIR="/etc/SSHPlus/abuse"
+WARN_DIR="/etc/SSHPlus/warnings"
+TEMP_BLOCK_DIR="/etc/SSHPlus/temp_block"
 
-mkdir -p $BLOCK_DIR
-mkdir -p $ABUSE_DIR
+LOG_ABUSE="/var/log/abuse.log"
 
-MAX_ABUSE=3
+mkdir -p "$LIMIT_DIR" "$BLOCK_DIR" "$ABUSE_DIR" "$WARN_DIR" "$TEMP_BLOCK_DIR"
+touch "$LOG_ABUSE"
 
-for user in $(ls $LIMIT_DIR 2>/dev/null); do
+# =========================
+# REGLAS PROFESIONALES
+# =========================
+# 1 abuso  = advertencia 1
+# 2 abusos = advertencia 2
+# 3 abusos = bloqueo temporal 10 minutos
+# 4 abusos = bloqueo temporal 30 minutos
+# 5 abusos = bloqueo temporal 60 minutos
+# 6 abusos = bloqueo permanente
+MAX_ABUSE_PERMANENT=6
 
+safe_user() {
+    echo "$1" | grep -Eq '^[a-zA-Z0-9._-]+$'
+}
+
+kill_user_sessions() {
+    local user="$1"
+    pkill -KILL -u "$user" 2>/dev/null
+    killall -u "$user" 2>/dev/null
+}
+
+get_user_pids() {
+    local user="$1"
+    ps -u "$user" -o pid=,comm= 2>/dev/null | grep -E 'sshd|dropbear' | awk '{print $1}'
+}
+
+for user in $(ls "$LIMIT_DIR" 2>/dev/null); do
+
+    safe_user "$user" || continue
     id "$user" &>/dev/null || continue
 
-    # 🚫 SI ESTA BLOQUEADO → MATAR TODO
+    LIMIT=$(cat "$LIMIT_DIR/$user" 2>/dev/null | tr -dc '0-9')
+    [[ -z "$LIMIT" || "$LIMIT" -le 0 ]] && continue
+
+    # =========================
+    # BLOQUEO PERMANENTE MANUAL
+    # =========================
     if [ -f "$BLOCK_DIR/$user" ]; then
-        pkill -KILL -u $user 2>/dev/null
+        kill_user_sessions "$user"
         continue
     fi
 
-    LIMIT=$(cat $LIMIT_DIR/$user 2>/dev/null)
-    [[ -z "$LIMIT" || "$LIMIT" -le 0 ]] && continue
+    # =========================
+    # BLOQUEO TEMPORAL ACTIVO
+    # =========================
+    if [ -f "$TEMP_BLOCK_DIR/$user" ]; then
+        UNLOCK_TIME=$(cat "$TEMP_BLOCK_DIR/$user" 2>/dev/null | tr -dc '0-9')
+        NOW=$(date +%s)
 
-    # 🔥 PROCESOS REALES
-    PIDS=$(ps -u $user -o pid=,comm= | grep -E 'sshd|dropbear' | awk '{print $1}')
+        if [[ -n "$UNLOCK_TIME" && "$NOW" -lt "$UNLOCK_TIME" ]]; then
+            usermod -L "$user" 2>/dev/null
+            usermod -s /bin/false "$user" 2>/dev/null
+            kill_user_sessions "$user"
+            continue
+        fi
+    fi
+
+    # =========================
+    # CONTAR CONEXIONES SSH/DROPBEAR
+    # =========================
+    PIDS=$(get_user_pids "$user")
     COUNT=$(echo "$PIDS" | grep -c .)
 
     if [ "$COUNT" -gt "$LIMIT" ]; then
@@ -76,34 +132,80 @@ for user in $(ls $LIMIT_DIR 2>/dev/null); do
         FILE="$ABUSE_DIR/$user"
 
         if [ ! -f "$FILE" ]; then
-            echo 1 > $FILE
+            echo 1 > "$FILE"
         else
-            NUM=$(cat $FILE)
+            NUM=$(cat "$FILE" 2>/dev/null | tr -dc '0-9')
+            [[ -z "$NUM" ]] && NUM=0
             NUM=$((NUM + 1))
-            echo $NUM > $FILE
+            echo "$NUM" > "$FILE"
         fi
 
-        ABUSE=$(cat $FILE)
+        ABUSE=$(cat "$FILE" 2>/dev/null | tr -dc '0-9')
+        [[ -z "$ABUSE" ]] && ABUSE=1
 
-        if [ "$ABUSE" -ge "$MAX_ABUSE" ]; then
-            echo "blocked" > $BLOCK_DIR/$user
+        echo "$ABUSE" > "$WARN_DIR/$user"
 
-            # 🔒 BLOQUEO FUERTE (CORREGIDO)
-            usermod -L $user 2>/dev/null
-            usermod -s /bin/false $user 2>/dev/null
+        echo "$(date '+%F %T') - Abuso detectado: $user conexiones=$COUNT limite=$LIMIT abuso=$ABUSE" >> "$LOG_ABUSE"
 
-            # 💣 MATAR TODO
-            pkill -KILL -u $user 2>/dev/null
+        # =========================
+        # BLOQUEO PROFESIONAL
+        # =========================
+        if [ "$ABUSE" -ge "$MAX_ABUSE_PERMANENT" ]; then
+
+            echo "blocked" > "$BLOCK_DIR/$user"
+            rm -f "$TEMP_BLOCK_DIR/$user"
+
+            usermod -L "$user" 2>/dev/null
+            usermod -s /bin/false "$user" 2>/dev/null
+            kill_user_sessions "$user"
+
+            echo "$(date '+%F %T') - Bloqueo permanente por reincidencia: $user" >> "$LOG_ABUSE"
+
+        elif [ "$ABUSE" -ge 5 ]; then
+
+            UNLOCK_TIME=$(( $(date +%s) + 3600 ))
+            echo "$UNLOCK_TIME" > "$TEMP_BLOCK_DIR/$user"
+
+            usermod -L "$user" 2>/dev/null
+            usermod -s /bin/false "$user" 2>/dev/null
+            kill_user_sessions "$user"
+
+            echo "$(date '+%F %T') - Bloqueo temporal 60 minutos: $user" >> "$LOG_ABUSE"
+
+        elif [ "$ABUSE" -ge 4 ]; then
+
+            UNLOCK_TIME=$(( $(date +%s) + 1800 ))
+            echo "$UNLOCK_TIME" > "$TEMP_BLOCK_DIR/$user"
+
+            usermod -L "$user" 2>/dev/null
+            usermod -s /bin/false "$user" 2>/dev/null
+            kill_user_sessions "$user"
+
+            echo "$(date '+%F %T') - Bloqueo temporal 30 minutos: $user" >> "$LOG_ABUSE"
+
+        elif [ "$ABUSE" -ge 3 ]; then
+
+            UNLOCK_TIME=$(( $(date +%s) + 600 ))
+            echo "$UNLOCK_TIME" > "$TEMP_BLOCK_DIR/$user"
+
+            usermod -L "$user" 2>/dev/null
+            usermod -s /bin/false "$user" 2>/dev/null
+            kill_user_sessions "$user"
+
+            echo "$(date '+%F %T') - Bloqueo temporal 10 minutos: $user" >> "$LOG_ABUSE"
+
         fi
 
-        # 🔥 MATAR EXCESOS
-        TO_KILL=$(ps -u $user -o pid=,comm= | grep -E 'sshd|dropbear' \
-            | awk '{print $1}' | tail -n +$(($LIMIT + 1)))
+        # =========================
+        # MATAR SOLO EXCESOS SI NO FUE BLOQUEADO
+        # =========================
+        if [ ! -f "$TEMP_BLOCK_DIR/$user" ] && [ ! -f "$BLOCK_DIR/$user" ]; then
+            TO_KILL=$(get_user_pids "$user" | tail -n +$((LIMIT + 1)))
 
-        for pid in $TO_KILL; do
-            kill -9 $pid 2>/dev/null
-        done
-
+            for pid in $TO_KILL; do
+                kill -9 "$pid" 2>/dev/null
+            done
+        fi
     fi
 
 done
@@ -112,7 +214,7 @@ EOF
 chmod +x /root/limit_pro.sh
 
 # =========================
-# SCRIPT ELIMINAR EXPIRADOS + AUTO UNLOCK INTELIGENTE
+# SCRIPT ELIMINAR EXPIRADOS + AUTO UNLOCK
 # =========================
 cat > /root/expire_clean.sh << 'EOF'
 #!/bin/bash
@@ -120,43 +222,82 @@ cat > /root/expire_clean.sh << 'EOF'
 LIMIT_DIR="/etc/SSHPlus/limits"
 BLOCK_DIR="/etc/SSHPlus/blocked"
 ABUSE_DIR="/etc/SSHPlus/abuse"
+WARN_DIR="/etc/SSHPlus/warnings"
+TEMP_BLOCK_DIR="/etc/SSHPlus/temp_block"
+
+TEMP_FILE="/etc/vpn_temp_users"
+
+LOG_EXPIRE="/var/log/expire.log"
+LOG_UNLOCK="/var/log/unlock.log"
+
+mkdir -p "$LIMIT_DIR" "$BLOCK_DIR" "$ABUSE_DIR" "$WARN_DIR" "$TEMP_BLOCK_DIR"
+touch "$TEMP_FILE" "$LOG_EXPIRE" "$LOG_UNLOCK"
+
+safe_user() {
+    echo "$1" | grep -Eq '^[a-zA-Z0-9._-]+$'
+}
+
+kill_user_sessions() {
+    local user="$1"
+    pkill -KILL -u "$user" 2>/dev/null
+    killall -u "$user" 2>/dev/null
+}
+
+remove_user_files() {
+    local user="$1"
+    rm -f "$LIMIT_DIR/$user"
+    rm -f "$BLOCK_DIR/$user"
+    rm -f "$ABUSE_DIR/$user"
+    rm -f "$WARN_DIR/$user"
+    rm -f "$TEMP_BLOCK_DIR/$user"
+    rm -f "$ABUSE_DIR/${user}_temp_count"
+}
 
 # =========================
-# 🔓 DESBLOQUEO INTELIGENTE
+# DESBLOQUEO TEMPORAL AUTOMÁTICO
 # =========================
-for user in $(ls "$BLOCK_DIR" 2>/dev/null); do
+NOW=$(date +%s)
 
-    id "$user" &>/dev/null || continue
+for user in $(ls "$TEMP_BLOCK_DIR" 2>/dev/null); do
 
-    LIMIT=$(cat "$LIMIT_DIR/$user" 2>/dev/null)
-    [[ -z "$LIMIT" || "$LIMIT" -le 0 ]] && continue
+    safe_user "$user" || continue
+    id "$user" &>/dev/null || {
+        rm -f "$TEMP_BLOCK_DIR/$user"
+        continue
+    }
 
-    # 🔥 CONTAR CONEXIONES ACTUALES
-    COUNT=$(ps -u "$user" -o comm= 2>/dev/null | grep -E 'sshd|dropbear' | wc -l)
+    # Si está bloqueado permanente/manual, no desbloquear.
+    [ -f "$BLOCK_DIR/$user" ] && continue
 
-    # ✅ SOLO DESBLOQUEAR SI YA RESPETA EL LIMITE
-    if [ "$COUNT" -le "$LIMIT" ]; then
+    UNLOCK_TIME=$(cat "$TEMP_BLOCK_DIR/$user" 2>/dev/null | tr -dc '0-9')
+
+    if [[ -n "$UNLOCK_TIME" && "$NOW" -ge "$UNLOCK_TIME" ]]; then
 
         usermod -U "$user" 2>/dev/null
         usermod -s /bin/bash "$user" 2>/dev/null
 
-        rm -f "$BLOCK_DIR/$user"
-        rm -f "$ABUSE_DIR/$user"
+        rm -f "$TEMP_BLOCK_DIR/$user"
 
-        echo "$(date) - Usuario desbloqueado correctamente: $user" >> /var/log/unlock.log
+        echo "$(date '+%F %T') - Desbloqueo automático temporal: $user" >> "$LOG_UNLOCK"
     fi
 
 done
 
 # =========================
-# 🧹 LIMPIAR EXPIRADOS (NO TOCAR BLOQUEADOS)
+# LIMPIAR USUARIOS NORMALES VENCIDOS
 # =========================
 for user in $(awk -F: '$3>=1000 {print $1}' /etc/passwd); do
 
+    safe_user "$user" || continue
     id "$user" &>/dev/null || continue
 
-    # 🚫 NO ELIMINAR SI ESTA BLOQUEADO
+    # No eliminar bloqueados permanentes/manuales
     if [ -f "$BLOCK_DIR/$user" ]; then
+        continue
+    fi
+
+    # Si es temporal, lo procesa la sección temporal
+    if grep -q "^$user|" "$TEMP_FILE" 2>/dev/null; then
         continue
     fi
 
@@ -171,26 +312,19 @@ for user in $(awk -F: '$3>=1000 {print $1}' /etc/passwd); do
 
     if [ "$TODAY" -ge "$EXPIRE_DATE" ]; then
 
-        # 💣 MATAR TODO
-        pkill -KILL -u "$user" 2>/dev/null
-        killall -u "$user" 2>/dev/null
-
-        # 🔥 ELIMINAR
+        kill_user_sessions "$user"
         userdel -f "$user" 2>/dev/null
 
-        rm -f "$LIMIT_DIR/$user"
-        rm -f "$BLOCK_DIR/$user"
-        rm -f "$ABUSE_DIR/$user"
+        remove_user_files "$user"
 
-        echo "$(date) - Usuario eliminado: $user" >> /var/log/expire.log
+        echo "$(date '+%F %T') - Usuario normal eliminado por fecha: $user" >> "$LOG_EXPIRE"
     fi
 
 done
-# =========================
-# 🔥 LIMPIAR USUARIOS TEMPORALES
-# =========================
-TEMP_FILE="/etc/vpn_temp_users"
 
+# =========================
+# LIMPIAR USUARIOS TEMPORALES
+# =========================
 if [ -f "$TEMP_FILE" ]; then
 
     NOW=$(date +%s)
@@ -198,29 +332,26 @@ if [ -f "$TEMP_FILE" ]; then
 
     while IFS="|" read -r user exp || [ -n "$user" ]; do
 
-        # 🔒 VALIDACIONES PRO
+        user="$(echo "$user" | xargs)"
+        exp="$(echo "$exp" | xargs)"
+
         [ -z "$user" ] && continue
+        safe_user "$user" || continue
         [[ ! "$exp" =~ ^[0-9]+$ ]] && continue
 
-        # si el usuario ya no existe → no lo guardes
+        # Si el usuario ya no existe, no guardar la línea
         if ! id "$user" &>/dev/null; then
             continue
         fi
 
         if [ "$NOW" -ge "$exp" ]; then
 
-            # 💣 matar sesiones
-            pkill -KILL -u "$user" 2>/dev/null
-            killall -u "$user" 2>/dev/null
-
-            # 🔥 eliminar usuario
+            kill_user_sessions "$user"
             userdel -f "$user" 2>/dev/null
 
-            rm -f "$LIMIT_DIR/$user"
-            rm -f "$BLOCK_DIR/$user"
-            rm -f "$ABUSE_DIR/$user"
+            remove_user_files "$user"
 
-            echo "$(date) - Temporal eliminado: $user" >> /var/log/expire.log
+            echo "$(date '+%F %T') - Usuario temporal eliminado: $user" >> "$LOG_EXPIRE"
 
         else
             NEW+="$user|$exp\n"
@@ -228,45 +359,32 @@ if [ -f "$TEMP_FILE" ]; then
 
     done < "$TEMP_FILE"
 
-    # 🔄 reescribir limpio
     printf "%b" "$NEW" > "$TEMP_FILE"
-
 fi
-
 EOF
 
 chmod +x /root/expire_clean.sh
 
 # =========================
-# 🔥 CREAR DAEMON AUTOMÁTICO (ANTI-DUPLICADOS)
+# CREAR DAEMON AUTOMÁTICO
 # =========================
-
 echo "⚙️ Configurando daemon de expiración..."
 
-# 🔄 detener servicio si ya existe
 systemctl stop expire-daemon 2>/dev/null
 systemctl disable expire-daemon 2>/dev/null
-
-# 🧹 eliminar servicio viejo
 rm -f /etc/systemd/system/expire-daemon.service
 
-# =========================
-# CREAR SCRIPT DAEMON
-# =========================
 cat > /root/expire_daemon.sh << 'EOF'
 #!/bin/bash
 
 while true; do
-    bash /root/expire_clean.sh
+    bash /root/expire_clean.sh >/dev/null 2>&1
     sleep 5
 done
 EOF
 
 chmod +x /root/expire_daemon.sh
 
-# =========================
-# CREAR SERVICIO SYSTEMD
-# =========================
 cat > /etc/systemd/system/expire-daemon.service <<EOF
 [Unit]
 Description=Expire Users Daemon PRO
@@ -282,49 +400,50 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-# =========================
-# ACTIVAR SERVICIO LIMPIO
-# =========================
 systemctl daemon-reexec
 systemctl daemon-reload
-
 systemctl enable expire-daemon
 systemctl restart expire-daemon
 
-echo "✅ Daemon activo (eliminación automática cada 5s)"
+echo "✅ Daemon activo: eliminación/desbloqueo cada 5s"
 
 # =========================
-# CONFIGURAR CRON LIMPIO
+# CONFIGURAR CRON SIN BORRAR OTROS CRON
 # =========================
-echo "* * * * * /root/limit_pro.sh" > /tmp/cronvpn
-
+crontab -l 2>/dev/null | grep -v '/root/limit_pro.sh' > /tmp/cronvpn
+echo "* * * * * /root/limit_pro.sh >/dev/null 2>&1" >> /tmp/cronvpn
 crontab /tmp/cronvpn
 rm -f /tmp/cronvpn
-# =========================
-# PERMISOS EXTRA
-# =========================
+
 chmod +x /root/*.sh
 
 # =========================
 # FINAL
 # =========================
 echo ""
-echo "✅ INSTALACIÓN COMPLETA Y LIMPIA"
+echo "✅ INSTALACIÓN COMPLETA Y PROFESIONAL"
 echo "━━━━━━━━━━━━━━━━━━━━━━"
 echo "✔ Sistema reiniciado sin errores"
 echo "✔ Anti multi-login activo"
 echo "✔ Límite por usuario activo"
-echo "✔ Bloqueo automático activo"
+echo "✔ Advertencias por abuso activas"
+echo "✔ Bloqueo temporal automático activo"
+echo "✔ Bloqueo permanente por reincidencia activo"
 echo "✔ Auto eliminación por fecha activo"
+echo "✔ Auto eliminación temporal activo"
+echo "✔ Auto desbloqueo temporal activo"
 echo "✔ Sistema anti-abuso activo"
 echo ""
 echo "📂 Rutas:"
-echo "Limits:   /etc/SSHPlus/limits"
-echo "Blocked:  /etc/SSHPlus/blocked"
-echo "Abuse:    /etc/SSHPlus/abuse"
+echo "Limits:      /etc/SSHPlus/limits"
+echo "Blocked:     /etc/SSHPlus/blocked"
+echo "Abuse:       /etc/SSHPlus/abuse"
+echo "Warnings:    /etc/SSHPlus/warnings"
+echo "TempBlock:   /etc/SSHPlus/temp_block"
 echo ""
 echo "📄 Logs:"
-echo "/var/log/expire.log"
+echo "$LOG_EXPIRE"
+echo "$LOG_ABUSE"
+echo "$LOG_UNLOCK"
 echo ""
 echo "🔥 VPS PRO LISTO 🚀"
-
