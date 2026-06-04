@@ -25,11 +25,40 @@ chmod 755 "$LIMIT_DIR" "$BLOCK_DIR" "$ABUSE_DIR" "$WARN_DIR" "$TEMP_BLOCK_DIR"
 chmod 644 "$LOG_EXPIRE" "$LOG_ABUSE" "$LOG_UNLOCK"
 
 # =========================
+# ASEGURAR CRON INSTALADO
+# =========================
+if ! command -v crontab >/dev/null 2>&1; then
+    echo "⚠ Cron no encontrado, instalando automáticamente..."
+
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -y >/dev/null 2>&1
+        apt-get install cron -y >/dev/null 2>&1
+        systemctl enable cron >/dev/null 2>&1
+        systemctl restart cron >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+        yum install cronie -y >/dev/null 2>&1
+        systemctl enable crond >/dev/null 2>&1
+        systemctl restart crond >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install cronie -y >/dev/null 2>&1
+        systemctl enable crond >/dev/null 2>&1
+        systemctl restart crond >/dev/null 2>&1
+    fi
+fi
+
+# =========================
 # LIMPIAR CRON ANTERIOR SOLO DE ESTOS SCRIPTS
 # =========================
-crontab -l 2>/dev/null | grep -v '/root/limit_pro.sh' | grep -v '/root/expire_clean.sh' > /tmp/cronvpn
-crontab /tmp/cronvpn
-rm -f /tmp/cronvpn
+if command -v crontab >/dev/null 2>&1; then
+    crontab -l 2>/dev/null | \
+    grep -v '/root/limit_pro.sh' | \
+    grep -v '/root/expire_clean.sh' > /tmp/cronvpn
+
+    crontab /tmp/cronvpn
+    rm -f /tmp/cronvpn
+else
+    echo "⚠ No se pudo instalar cron, se continuará solo con expire-daemon"
+fi
 
 # =========================
 # MATAR PROCESOS ANTERIORES
@@ -410,10 +439,21 @@ echo "✅ Daemon activo: eliminación/desbloqueo cada 5s"
 # =========================
 # CONFIGURAR CRON SIN BORRAR OTROS CRON
 # =========================
-crontab -l 2>/dev/null | grep -v '/root/limit_pro.sh' > /tmp/cronvpn
-echo "* * * * * /root/limit_pro.sh >/dev/null 2>&1" >> /tmp/cronvpn
-crontab /tmp/cronvpn
-rm -f /tmp/cronvpn
+if command -v crontab >/dev/null 2>&1; then
+
+    crontab -l 2>/dev/null | \
+    grep -v '/root/limit_pro.sh' > /tmp/cronvpn
+
+    echo "* * * * * /root/limit_pro.sh >/dev/null 2>&1" >> /tmp/cronvpn
+
+    crontab /tmp/cronvpn
+    rm -f /tmp/cronvpn
+
+    echo "✅ Cron configurado correctamente"
+
+else
+    echo "⚠ Cron no disponible. expire-daemon seguirá activo para expirados/desbloqueos."
+fi
 
 chmod +x /root/*.sh
 
